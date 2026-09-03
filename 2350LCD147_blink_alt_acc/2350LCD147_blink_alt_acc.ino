@@ -13,6 +13,9 @@
 #include "SD.h"   // SD card lib
 #include "SPI.h"  // spi lib for connecting to SD card
 #include <Servo.h>
+//#include "src/libraries/TFT_eSPI/TFT_eSPI.h"  // Graphics and font library for ILI9341 driver chip
+#include <TFT_eSPI.h>  // Graphics and font library for ILI9341 driver chip
+#include <SPI.h>
 
 // needed for SD card to work, pins card is wired to SPI1
 int sck = 10;   //
@@ -44,8 +47,7 @@ Adafruit_BMP3XX bmp;
 CRGB leds[NUM_LEDS];
 
 
-#include <TFT_eSPI.h>  // Graphics and font library for ILI9341 driver chip
-#include <SPI.h>
+
 
 #define TFT_GREY 0x5AEB  // New colour
 
@@ -77,6 +79,7 @@ servo1.attach(SERVO_PIN, 1000, 2000);
       delay(10);
     }
     Serial.println("ICM20649 Found!");
+    icm.setAccelDLPF();
   }
 
   if (!bmp.begin_I2C()) {  // hardware I2C mode, can pass in address & alt Wire
