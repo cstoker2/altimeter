@@ -4,7 +4,7 @@
 
 #include <Arduino.h>
 #include <FastLED.h>
-#include <Adafruit_ICM20X.h>
+//#include <Adafruit_ICM20X.h>
 #include <Adafruit_ICM20649.h>
 #include "Adafruit_BMP3XX.h"
 #include <Adafruit_Sensor.h>
