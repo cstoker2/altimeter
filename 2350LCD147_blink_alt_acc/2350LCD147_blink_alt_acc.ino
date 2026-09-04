@@ -79,7 +79,7 @@ servo1.attach(SERVO_PIN, 1000, 2000);
       delay(10);
     }
     Serial.println("ICM20649 Found!");
-    //icm.setAccelDLPF();
+    icm.setAccelDLPF();
   }
 
   if (!bmp.begin_I2C()) {  // hardware I2C mode, can pass in address & alt Wire
