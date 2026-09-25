@@ -16,6 +16,7 @@
 //#include "src/libraries/TFT_eSPI/TFT_eSPI.h"  // Graphics and font library for ILI9341 driver chip
 #include <TFT_eSPI.h>  // Graphics and font library for ILI9341 driver chip
 #include <SPI.h>
+#include <Encoder.h>
 
 // needed for SD card to work, pins card is wired to SPI1
 int sck = 10;   //
@@ -28,6 +29,8 @@ Servo servo1;
 #define SERVO_PIN 3
 int servoPosition = 1500;
 int servoInc =100;
+
+Encoder myEnc(6, 7);
 
 Adafruit_ICM20649 icm;
 uint16_t measurement_delay_us = 65535;  // Delay between measurements for testing
@@ -52,6 +55,7 @@ CRGB leds[NUM_LEDS];
 
 TFT_eSPI tft = TFT_eSPI();  // Invoke library
 
+long oldPosition  = -999;
 
 void setup() {
   Serial.begin(115200);
@@ -114,6 +118,12 @@ void setup() {
 
 void loop() {
   Serial.print("BLINK");
+
+  long newPosition = myEnc.read();
+  if (newPosition != oldPosition) {
+    oldPosition = newPosition;
+    Serial.println(newPosition);
+  }
 
   //  /* Get a new normalized sensor event */
   sensors_event_t accel;
