@@ -25,4 +25,7 @@ void Adafruit_ICM20649::setAccelDLPF() {
   _setBank(0);
 }
 
+encoder lib:
+https://github.com/gbr1/rp2040-encoder-library
+
 */

@@ -26,6 +26,8 @@ bool SDinit;
 
 Servo servo1;
 #define SERVO_PIN 3
+int servoPosition = 1500;
+int servoInc =100;
 
 Adafruit_ICM20649 icm;
 uint16_t measurement_delay_us = 65535;  // Delay between measurements for testing
@@ -45,9 +47,6 @@ Adafruit_BMP3XX bmp;
 
 // Define the array of leds
 CRGB leds[NUM_LEDS];
-
-
-
 
 #define TFT_GREY 0x5AEB  // New colour
 
@@ -71,7 +70,7 @@ void setup() {
   }
   Serial.println("Card OK");
 
-servo1.attach(SERVO_PIN, 1000, 2000); 
+  servo1.attach(SERVO_PIN, 1000, 2000);
 
   if (!icm.begin_I2C()) {
     Serial.println("Failed to find ICM20649 chip");
@@ -133,7 +132,9 @@ void loop() {
   FastLED.show();
   delay(500);
 
-servo1.write(1500);
+  servoPosition = servoPosition + servoInc;
+  if (servoPosition > 2000 || servoPosition <1000) servoInc = -servoInc;
+  servo1.write(servoPosition);
 
   // Now turn the LED off, then pause
   leds[0] = CRGB::Black;
