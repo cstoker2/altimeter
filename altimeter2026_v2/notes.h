@@ -35,6 +35,7 @@ void Adafruit_ICM20649::setAccelDLPF() {
 
 encoder lib:
 encoder from paul stoffregen
+must use included version patched for 2350 pin interrupt definitions
 
 battery lib:
 https://github.com/rlogiacco/BatterySense#double-cell-li-ion-2p-on-demand-for-33v-mcu-with-12-bits-adc
