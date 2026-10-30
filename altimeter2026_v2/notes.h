@@ -34,9 +34,10 @@ void Adafruit_ICM20649::setAccelDLPF() {
 }
 
 encoder lib:
-https://github.com/gbr1/rp2040-encoder-library
+encoder from paul stoffregen
 
 battery lib:
 https://github.com/rlogiacco/BatterySense#double-cell-li-ion-2p-on-demand-for-33v-mcu-with-12-bits-adc
 
+running average lib
 */

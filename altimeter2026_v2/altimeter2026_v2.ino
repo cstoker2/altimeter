@@ -40,6 +40,7 @@ int latchServoPosition = 2000;  //start open
 #define SWITCH_PIN 8   //encoder switch
 bool switchClick = 0;  // store switch state
 
+#define ARDUINO_NANO_RP2040_CONNECT 1
 Encoder myEnc(6, 7);  //rotary encoder
 
 Adafruit_ICM20649 icm;
