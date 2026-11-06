@@ -1,4 +1,5 @@
-// altimeter2026_v1.ino
+// altimeter2026_v2.ino
+int fwVersionNumber = 02;  //firmware version
 
 #include <Arduino.h>
 #include <FastLED.h>
@@ -16,8 +17,6 @@
 #include "RunningAverage.h"  // running average library: calculates average and max / min easily
 #include <Battery.h>
 
-int versionNumber = 02;  //firmware version
-
 // needed for SD card to work, pins card is wired to SPI1
 int sck = 10;   //
 int miso = 12;  //
@@ -25,52 +24,44 @@ int mosi = 11;  //
 int cs = 15;    //
 bool SDinit;
 
-#define M2FEET 3.28084  // meters to feet conversion factor
-
+#define LATCH_SERVO_PIN 2
+#define BRAKE_SERVO_PIN 3
+#define SWITCH_PIN 8       //encoder momentary switch
+#define DATA_PIN 22        // rgb led
 #define BATT_SENSE_PIN 26  // (10.41 + 6.55) / 6.55 = 2.589
 
-Servo brakeServo;  // brakes
-#define BRAKE_SERVO_PIN 3
+Servo brakeServo;               // brakes
 int brakeServoPosition = 1500;  //start middle
-
-Servo latchServo;  // dual deploy latch
-#define LATCH_SERVO_PIN 2
+Servo latchServo;               // dual deploy latch
 int latchServoPosition = 2000;  //start open
 
-#define SWITCH_PIN 8   //encoder switch
-bool switchClick = 0;  // store switch state
-
-Encoder myEnc(6, 7);  //rotary encoder
-
-Adafruit_ICM20649 icm;
-uint16_t measurement_delay_us = 65535;  // Delay between measurements for testing
-
-Adafruit_BMP3XX bmp;
-
-// leds
-#define NUM_LEDS 1
-#define DATA_PIN 22  // rgb led
-
-// Define the array of leds
-CRGB leds[NUM_LEDS];
-
-#define TFT_GREY 0x5AEB  // New colour
-#define PIXELPERLINE 24  //on lcd for font 4
-
-TFT_eSPI tft = TFT_eSPI();  // Invoke library
-
+Encoder myEnc(6, 7);      //rotary encoder
+bool switchClick = 0;     // store encoder switch state
 long oldPosition = -999;  // for encoder
 
-//====================
-int TARGET_ALT = 750;  // trigger height in m
-int FLIGHT_NUM;        // number of flights or boots of the arduino
+Adafruit_ICM20649 icm;  // accelerometer
+Adafruit_BMP3XX bmp;    // barometric sensor
 
-#define SERIAL_DEBUG 1  // print serial monitor data  toggle
+#define NUM_LEDS 1  // led
+CRGB leds[NUM_LEDS];
 
-#define LAUNCH_THRESHOLD 10.0    // Launch detection threshold in meters/second
-#define SAMPLE_WINDOW 20         // Number of samples to check for rate calculation
-#define DRIFT_THRESHOLD 0.00635  // 0.25 inches in meters - threshold for resetting gnd_alt
-#define APOGEE_THRESHOLD -20.0   // 20 m/s ? guess
+TFT_eSPI tft = TFT_eSPI();  // lcd library instance
+#define TFT_GREY 0x5AEB     // New colour grey
+#define PIXELPERLINE 24     //line height on lcd for font 4
+
+int FLIGHT_NUM;           // number of flights or boots of the arduino
+#define SERIAL_DEBUG 1    // print serial monitor data  toggle
+#define M2FEET 3.28084    // meter to feet conversion factor
+#define DM2FEET 0.328084  // decimeter to feet conversion factor
+#define FEET2M 0.3048     // foot to meter conversion factor
+#define FEET2DM 3.048     // feet to decimeter conversion factor
+
+float TARGET_ALT_M = 750 * FEET2M;  // trigger height in m
+
+#define LAUNCH_THRESHOLD_MpS 10.0  // Launch detection threshold in meters/second
+#define SAMPLE_WINDOW 20           // Number of samples to check for rate calculation
+#define DRIFT_THRESHOLD_M 0.00635  // 0.25 inches in meters - threshold for resetting gnd_alt
+#define APOGEE_THRESHOLD_M 20.0    // when max is this different from diff_alt, apogee happened. in M
 
 // servo position variables
 int LATCH_OPEN = 1000;   // open
@@ -78,8 +69,8 @@ int LATCH_CLOSE = 2000;  // shut
 int BRAKE_OPEN = 1220;   // full brake
 int BRAKE_CLOSE = 1925;  // brakes off
 
-int SEALEVELPRESSURE_HPA = 1017;  // https://weather.us/observations/new-mexico/pressure-qnh/20230920-1700z.html#obs-detail-723650
-//#define SEALEVELPRESSURE_HPA 1019 //typical ABQ value 1017 gave good agreement with competition altimeter.
+int HPA = 1017;  // https://weather.us/observations/new-mexico/pressure-qnh/20230920-1700z.html#obs-detail-723650
+                 // 1019 typical ABQ value 1017 gave good agreement with competition altimeter.
 
 char numString[5];    // short string for loggin fn
 char battString[8];   // short battery "7.55v" string
@@ -93,26 +84,35 @@ RunningAverage altRA(500);  // store 500 measurments (25 seconds of data at 20hz
 float ini_alt = 0;        // initial averaged alt
 float dif_alt = 0;        // altitude difference from initial in m
 float gnd_alt = 0;        // percieved ground level altitude in m
+float prevMax_alt = 0;    // previous max alt value for apogee detect method 2
 float triggered_alt = 0;  // alt trigger occurred in m
 float current_alt = 0;    // live reading of alt
-float deltaT = 0.1;       // time step, avoid divide by zero
+float deltaT = 0.1;       // time step, initial set small to avoid divide by zero
 
-#define loopms 15                         // how many milliseconds per measurement loop 20ms = 50hz 10ms = 100hZ 1ms5 = 66hz
-#define serialms 200                      // milliseconds per serial print loop
-#define menums 250                        // milliseconds permenu loop
-unsigned long lastloop = millis();        // loop timer
-unsigned long triggeredTime = 0;          // trigger timer
-unsigned long serialLoop = millis();      // longer serial output loop
-unsigned long menuLoop = millis();        // menu update loop
-unsigned long apogeeTime = millis();      // time when apogee happened
-unsigned long dispUpdateTime = millis();  // time menu display updated
+#define loopms 15     // how many milliseconds per measurement loop 20ms = 50hz 10ms = 100hZ 1ms5 = 66hz
+#define serialms 200  // milliseconds per serial print loop
+#define menums 250    // milliseconds permenu loop
+#define lcdms 1000    // milliseconds per lcd re-draw
+
+unsigned long lastloop = millis();    // loop timer
+unsigned long serialLoop = millis();  // longer serial output loop
+unsigned long menuLoop = millis();    // menu update loop
+unsigned long lcdLoop = millis();     // lcd display update loop
+
+unsigned long apogeeTime = millis();  // time when apogee happened
+unsigned long deployTime = 0;         // dual deploy time
 unsigned long currentTime;
+unsigned long maxInflectTime;  // time max stopped increading
 
-bool launch_detected = false;  // New flag for launch detection
-bool apogee_detected = false;  // apogee has occured
+
+bool launch_detected = false;   // New flag for launch detection
+bool apogee1_detected = false;  // apogee method 1 has occured
+bool apogee2_detected = false;  // apogee method 2has occured
+bool maxInflected = false;      // max has stopped increasing
+
 float rate = 0.0;
 
-int chuteDelay = 1000;
+int deployDelay = 10000;
 int menuState = 0;
 int prevMenuState = 0;
 int knobInc = 0;
@@ -120,7 +120,6 @@ bool lcdUpdate = 1;
 
 //pinMode(BATT_SENSE_PIN, INPUT);
 Battery battery(6000, 8400, BATT_SENSE_PIN, 12);  //2s lipo on 12bit adc
-
 
 //logging function to append data to the end of the file
 void appendFile(SDClass &fs, const char *path, const char *message) {
@@ -176,7 +175,7 @@ int writeFile(SDClass &fs, const char *path, const char *message) {
   }
 }
 
-void serialLogTransfer() {
+void serialLogTransfer() {  // select and send log file out over serial
   char fileList[50][20];
   int fileCount = 0;
 
@@ -305,14 +304,11 @@ void setup() {
   tft.init();
   tft.setRotation(2);  // usbport at bottom
   tft.fillScreen(TFT_GREY);
-  // Set "cursor" at top left corner of display (0,0) and select font 4
-  tft.setCursor(0, 0, 4);
-  // Set the font colour to be white with a black background, set text size multiplier to 1
-  tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.setTextSize(1);
-
+  tft.setCursor(0, 0, 4);                  // Set "cursor" at top left corner of display (0,0) and select font 4
+  tft.setTextColor(TFT_GREEN, TFT_BLACK);  // Set the font colour to be white with a black background,
+  tft.setTextSize(1);                      //set text size multiplier to 1
   tft.print("Altimeter V");
-  tft.println(versionNumber);
+  tft.println(fwVersionNumber);
 
   pinMode(BATT_SENSE_PIN, INPUT);
   analogReadResolution(12);
@@ -338,34 +334,33 @@ void setup() {
   if (SERIAL_DEBUG) Serial.println("Card OK");
   tft.println("SD ok");
 
-  //=============
   // read flight variables from SD card
   if (SD.exists("/hpa.txt")) {
-    SEALEVELPRESSURE_HPA = read3File(SD, "/hpa.txt");
+    HPA = read3File(SD, "/hpa.txt");
     SD.remove("/hpa.txt");
   }  // ground level air pressure in text file
-  sprintf(numString, "%05d", SEALEVELPRESSURE_HPA);
+  sprintf(numString, "%05d", HPA);
   writeFile(SD, "/hpa.txt", numString);
   tft.print("HPA:");
-  tft.println(SEALEVELPRESSURE_HPA);
+  tft.println(HPA);
 
   if (SD.exists("/target.txt")) {
-    TARGET_ALT = read3File(SD, "/target.txt");
+    TARGET_ALT_M = (int)read3File(SD, "/target.txt") * 0.1;  //store in decimeters, use in M
     SD.remove("/target.txt");
-  }  // desired release height in ft in text file
-  sprintf(numString, "%05d", TARGET_ALT);
+  }                                                 // desired release height in ft in text file
+  sprintf(numString, "%05d", TARGET_ALT_M * 10.0);  //store in Decimeters
   writeFile(SD, "/target.txt", numString);
-  tft.print("target:");
-  tft.println(TARGET_ALT);
+  tft.print("target ft:");
+  tft.println(TARGET_ALT_M * M2FEET);
 
   if (SD.exists("/deploydelay.txt")) {
-    chuteDelay = read3File(SD, "/deploydelay.txt");
+    deployDelay = read3File(SD, "/deploydelay.txt");
     SD.remove("/deploydelay.txt");
   }  // desired release height in ft in text file
-  sprintf(numString, "%05d", chuteDelay);
+  sprintf(numString, "%05d", deployDelay);
   writeFile(SD, "/deploydelay.txt", numString);
   tft.print("deploy: ");
-  tft.println(chuteDelay);
+  tft.println(deployDelay);
 
   FLIGHT_NUM = read3File(SD, "/fn.txt");  // desired release height in ft in text file
 
@@ -388,18 +383,20 @@ void setup() {
   if (SD.exists("/brakeshut.txt")) { BRAKE_CLOSE = read3File(SD, "/brakeshut.txt"); }
 
   if (SERIAL_DEBUG) {
-    Serial.print("SEALEVELPRESSURE_HPA = ");
-    Serial.println(SEALEVELPRESSURE_HPA);
+    Serial.print("HPA = ");
+    Serial.println(HPA);
     Serial.print("Read deploydelay.txt and got delay  = ");
-    Serial.println(chuteDelay);
+    Serial.println(deployDelay);
     Serial.print("Read target.txt and got target  = ");
-    Serial.println(TARGET_ALT);
+    Serial.println(TARGET_ALT_M * M2FEET);
     Serial.print("Read fn.txt and got FN  = ");
     Serial.println(FLIGHT_NUM);
   }
 
   brakeServo.attach(BRAKE_SERVO_PIN, 1000, 2000);
   latchServo.attach(LATCH_SERVO_PIN, 1000, 2000);
+
+  //\\\\\\\\\
 
   if (!icm.begin_I2C()) {
     if (SERIAL_DEBUG) Serial.println("Failed to find ICM20649 chip");
@@ -410,8 +407,29 @@ void setup() {
     }
     if (SERIAL_DEBUG) Serial.println("ICM20649 Found!");
     tft.println("ACCEL ok");
-    icm.setAccelDLPF();
   }
+  icm.setAccelRange(ICM20649_ACCEL_RANGE_30_G);
+  icm.setGyroRange(ICM20649_GYRO_RANGE_500_DPS);
+  //  icm.setAccelRateDivisor(4095);
+  uint16_t accel_divisor = icm.getAccelRateDivisor();
+  float accel_rate = 1125 / (1.0 + accel_divisor);
+
+  Serial.print("Accelerometer data rate divisor set to: ");
+  Serial.println(accel_divisor);
+  Serial.print("Accelerometer data rate (Hz) is approximately: ");
+  Serial.println(accel_rate);
+
+  //  icm.setGyroRateDivisor(255);
+  uint8_t gyro_divisor = icm.getGyroRateDivisor();
+  float gyro_rate = 1100 / (1.0 + gyro_divisor);
+
+  Serial.print("Gyro data rate divisor set to: ");
+  Serial.println(gyro_divisor);
+  Serial.print("Gyro data rate (Hz) is approximately: ");
+  Serial.println(gyro_rate);
+
+  icm.setAccelDLPF();
+
 
   if (!bmp.begin_I2C()) {  // hardware I2C mode, can pass in address & alt Wire
     if (SERIAL_DEBUG) Serial.println("Could not find a valid BMP3 sensor, check wiring!");
@@ -432,14 +450,21 @@ void setup() {
   leds[0] = CRGB::Red;
   FastLED.show();
 
-  //=============
   if (SERIAL_DEBUG) Serial.println("averaging sensor altitude readings ...");
   tft.println("averaging...");
   for (int i = 0; i < 300; i++) {  // take readings for 15 sec
     bmp.performReading();
-    altRA.addValue(bmp.readAltitude(SEALEVELPRESSURE_HPA));
-    delay(50);
+    altRA.addValue(bmp.readAltitude(HPA));
+    delay(25);
+    leds[0] = CRGB::Blue;
+    FastLED.show();
+    delay(25);
+    leds[0] = CRGB::Yellow;
+    FastLED.show();
   }
+
+  leds[0] = CRGB::Red;
+  FastLED.show();
 
   ini_alt = altRA.getAverageLast(100);  // set base altitude average of last 5 sec. of readings
   gnd_alt = ini_alt;
@@ -466,10 +491,9 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
 
   // log data header to card
-
-  sprintf(dataString, "FN: %d, GND: %4.2f, Target: %4.2f, HPA: %d, Delay: %d\n", FLIGHT_NUM, gnd_alt * M2FEET, TARGET_ALT * M2FEET, SEALEVELPRESSURE_HPA, chuteDelay);
+  sprintf(dataString, "FN: %d, GND: %4.2f, Target: %4.2f, HPA: %d, Delay: %d\n", FLIGHT_NUM, gnd_alt * M2FEET, TARGET_ALT_M * M2FEET, HPA, deployDelay);
   appendFile(SD, rocketLog, dataString);  // headers for data file
-  appendFile(SD, rocketLog, "FN, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brake%, launch, apogee, latchsrvo, X, Y, Z(m/s^2)\n");
+  appendFile(SD, rocketLog, "FN, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brake%, launch, apogee, latchsrvo, X, Y, Z(m/s^2), battery(mV)\n");
 }
 
 void loop() {
@@ -492,7 +516,7 @@ void loop() {
     bmp.performReading();
     icm.getEvent(&accel, &gyro, &temp);
 
-    current_alt = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    current_alt = bmp.readAltitude(HPA);
     altRA.addValue(current_alt);  // Store actual altitude
 
     // Calculate  rate of change
@@ -508,13 +532,13 @@ void loop() {
     if (!launch_detected) {  //hasn't launched, keep updating Ground level
       // Check if we need to correct for drift
       dif_alt = current_alt - gnd_alt;
-      if (abs(dif_alt) > DRIFT_THRESHOLD) {
+      if (abs(dif_alt) > DRIFT_THRESHOLD_M) {
         gnd_alt = altRA.getAverage();  // Reset groundlevel  using running average
         // i think this is redundant, but leaving for double check...
         //dif_alt = current_alt - gnd_alt;  // reset current height to gnd so it doesn't jummp as gnd changed.
       }
 
-      if (rate > LAUNCH_THRESHOLD) {
+      if (rate > LAUNCH_THRESHOLD_MpS) {  // moving up at > 10m/s
         launch_detected = true;
 
         if (SERIAL_DEBUG) {
@@ -524,19 +548,34 @@ void loop() {
           Serial.println(" m/s");
         }
       }
-    } else {
+    } else {                            // launched! update altitude
       dif_alt = current_alt - gnd_alt;  // setting dif_alt each loop
     }
 
-    if (launch_detected && !apogee_detected) {              // flying up
-      if (altRA.getMax() - altRA.getAverageLast(6) > 50) {  // if height is consistently less than max, apogee happened
-        apogee_detected = true;
+    if (launch_detected && !(apogee1_detected || apogee2_detected)) {  // flying up, neither apogee
+      //method 1 average compare:
+      if ((altRA.getMax() - altRA.getAverageLast(6)) > APOGEE_THRESHOLD_M) {  // if max is 20 more then average of last 0.2 sec, apogee happened
+        apogee1_detected = true;
+        apogeeTime = millis();
+      }
+
+      //method 2 max inflection:
+      if (prevMax_alt > altRA.getMax() && !maxInflected) {  //check if max is not increasing..
+        maxInflectTime = millis();
+        maxInflected = true;
+      }
+      if (prevMax_alt <= altRA.getMax()) {
+        prevMax_alt = altRA.getMax();  // record max alt
+        maxInflected = false;
+      }
+      if (maxInflected && (millis() - maxInflectTime > 330)) {  //if it was not inxreasing for 1/3 sec then apogee...
+        apogee2_detected = true;
         apogeeTime = millis();
       }
     }
 
-    if (apogee_detected) {                             // has turned around
-      if (millis() - apogeeTime > chuteDelay * 100) {  //chute delay is in 100ths of a sec so 1000 * 100 = 100000 ms = 10 s
+    if (apogee1_detected || apogee2_detected) {   // has turned around
+      if (millis() - apogeeTime > deployDelay) {  //deploy delay is in ms of a sec so 10000 ms = 10 s
         latchServoPosition = LATCH_OPEN;
       }
     }
@@ -544,10 +583,10 @@ void loop() {
     //LOGGING
 
     //fill datastring with logging data:
-    //FlightNum, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brake%, launch, apogee, latchsrvo, X, Y, Z(m/s^2), batt(mV)
-    sprintf(dataString, "FN%d, %4.3f, %4.2f, %4.2f, %4.2f, %4.2f, %d, %d,%d, %d, %4.1f,%4.1f,%4.1f,%d\n ",
+    //FlightNum, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brakesrvo, latchsrvo, launch, apogee1, apogee2, X, Y, Z(m/s^2), batt(mV)
+    sprintf(dataString, "FN%d,%4.3f,%4.2f,%4.2f,%4.2f,%4.2f,%d,%d,%d,%d,%d,%4.1f,%4.1f,%4.1f,%d\n",
             FLIGHT_NUM, currentTime * .001, dif_alt * M2FEET, rate, gnd_alt * M2FEET, (altRA.getMax() - ini_alt) * M2FEET,
-            map(brakeServoPosition, BRAKE_CLOSE, BRAKE_OPEN, 0, 100), launch_detected, apogee_detected, latchServoPosition,
+            brakeServoPosition, latchServoPosition, launch_detected, apogee1_detected, apogee2_detected,
             (float)accel.acceleration.x, (float)accel.acceleration.y, (float)accel.acceleration.z, battery.voltage());
 
     // fill buffer
@@ -577,13 +616,13 @@ void loop() {
     switchClick = !digitalRead(SWITCH_PIN);  // read switch presses 1=press, 0 = no press
 
 
-    if (millis() - dispUpdateTime > 1000) {
-      dispUpdateTime = millis();
+    if (millis() - lcdLoop > lcdms) {
+      lcdLoop = millis();
       tft.setCursor(5, 0, 4);
       tft.setTextColor(TFT_BLUE, TFT_BLACK);  //blue is actual red
       //topline
       tft.print("V");
-      tft.print(versionNumber);
+      tft.print(fwVersionNumber);
       tft.print(" FN");
       tft.print(FLIGHT_NUM);
       tft.print(" ");
@@ -605,15 +644,15 @@ void loop() {
       //Target
       tft.setCursor(0, 3 * PIXELPERLINE, 4);
       tft.print("Target: ");
-      tft.println(TARGET_ALT);
+      tft.println(TARGET_ALT_M);
       //HPA
       tft.setCursor(0, 4 * PIXELPERLINE, 4);
       tft.print("HPA: ");
-      tft.println(SEALEVELPRESSURE_HPA);
+      tft.println(HPA);
       //Chute
       tft.setCursor(0, 5 * PIXELPERLINE, 4);
       tft.print("Deploy: ");
-      tft.println(chuteDelay);
+      tft.println(deployDelay);
       //BrakeStatus
       tft.setCursor(0, 7 * PIXELPERLINE, 4);
       tft.print("Brakes: ");
@@ -648,15 +687,15 @@ void loop() {
       //Target
       tft.setCursor(0, 3 * PIXELPERLINE, 4);
       tft.print("Target: ");
-      tft.println(TARGET_ALT);
+      tft.println(TARGET_ALT_M);
       //HPA
       tft.setCursor(0, 4 * PIXELPERLINE, 4);
       tft.print("HPA: ");
-      tft.println(SEALEVELPRESSURE_HPA);
+      tft.println(HPA);
       //Chute
       tft.setCursor(0, 5 * PIXELPERLINE, 4);
       tft.print("Deploy: ");
-      tft.println(chuteDelay);
+      tft.println(deployDelay);
       //BrakeEndpoints
       tft.setCursor(0, 6 * PIXELPERLINE, 4);
       tft.print("BrkMin:");
@@ -800,7 +839,7 @@ void loop() {
         tft.setCursor(0, 3 * PIXELPERLINE, 4);
         tft.print("Target: ");
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
-        tft.println(TARGET_ALT);
+        tft.println(TARGET_ALT_M);
         if (switchClick) menuState = menuState + 5;
         menuState = menuState + 10 * knobInc;
         break;
@@ -808,10 +847,10 @@ void loop() {
         tft.setCursor(0, 3 * PIXELPERLINE, 4);
         tft.print("Target: ");
         tft.setTextColor(TFT_BLACK, TFT_WHITE);  //highlite
-        tft.println(TARGET_ALT);
+        tft.println((int)TARGET_ALT_M * M2FEET);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
-        TARGET_ALT = TARGET_ALT + knobInc;
+        TARGET_ALT_M = TARGET_ALT_M + knobInc;
         break;
 
       case 120:                                  // HPA
@@ -819,7 +858,7 @@ void loop() {
         tft.setCursor(0, 4 * PIXELPERLINE, 4);
         tft.print("HPA: ");
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
-        tft.println(SEALEVELPRESSURE_HPA);
+        tft.println(HPA);
         if (switchClick) menuState = menuState + 5;
         menuState = menuState + 10 * knobInc;
         break;
@@ -827,10 +866,10 @@ void loop() {
         tft.setCursor(0, 4 * PIXELPERLINE, 4);
         tft.print("HPA: ");
         tft.setTextColor(TFT_BLACK, TFT_WHITE);  //highlite
-        tft.println(SEALEVELPRESSURE_HPA);
+        tft.println(HPA);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
-        SEALEVELPRESSURE_HPA = SEALEVELPRESSURE_HPA + knobInc;
+        HPA = HPA + knobInc;
         break;
 
       case 130:  //deploy
@@ -838,7 +877,7 @@ void loop() {
         tft.setTextColor(TFT_BLACK, TFT_WHITE);  //highlite
         tft.print("Deploy: ");
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
-        tft.println(chuteDelay);
+        tft.println(deployDelay);
         if (switchClick) menuState = menuState + 5;
         menuState = menuState + 10 * knobInc;
         break;
@@ -846,10 +885,10 @@ void loop() {
         tft.setCursor(0, 5 * PIXELPERLINE, 4);
         tft.print("Deploy: ");
         tft.setTextColor(TFT_BLACK, TFT_WHITE);  //highlite
-        tft.println(chuteDelay);
+        tft.println(deployDelay);
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
-        chuteDelay = chuteDelay + knobInc;
+        deployDelay = deployDelay + 100 * knobInc;
         break;
 
       case 140:  //brakeMin
@@ -938,7 +977,7 @@ void loop() {
         if (switchClick) menuState = 0;  //Click to save
         {
           if (SD.exists("/target.txt")) SD.remove("/target.txt");
-          sprintf(numString, "%05d", TARGET_ALT);
+          sprintf(numString, "%05d", TARGET_ALT_M);
           writeFile(SD, "/target.txt", numString);
 
           if (SD.exists("/latchopen.txt")) SD.remove("/latchopen.txt");
@@ -958,11 +997,11 @@ void loop() {
           writeFile(SD, "/brakeshut.txt", numString);
 
           if (SD.exists("/hpa.txt")) SD.remove("/hpa.txt");
-          sprintf(numString, "%05d", SEALEVELPRESSURE_HPA);
+          sprintf(numString, "%05d", HPA);
           writeFile(SD, "/hpa.txt", numString);
 
           if (SD.exists("/deploydelay.txt")) SD.remove("/deploydelay.txt");
-          sprintf(numString, "%05d", chuteDelay);
+          sprintf(numString, "%05d", deployDelay);
           writeFile(SD, "/deploydelay.txt", numString);
         }
         menuState = menuState + 10 * knobInc;
@@ -980,7 +1019,7 @@ void loop() {
 
     lcdUpdate = true;
     if (prevMenuState == menuState) lcdUpdate = false;
-    if (abs(prevMenuState - menuState) > 100) {  // wipe if switching menu <-> edit
+    if (abs(prevMenuState - menuState) > 100) {  // wipe background black if switching menu <-> edit
       tft.fillScreen(TFT_BLACK);
     }
     prevMenuState = menuState;
@@ -1000,8 +1039,6 @@ void loop() {
       }
       Serial.print(" menuState ");
       Serial.print(menuState);
-      Serial.print(" bat: ");
-      Serial.print(battery.voltage() / 1000.0);
       Serial.print(" dataString: ");
       Serial.println(dataString);
     }
