@@ -26,18 +26,18 @@ bool SDinit;
 
 #define LATCH_SERVO_PIN 2
 #define BRAKE_SERVO_PIN 3
-#define SWITCH_PIN 8       //encoder momentary switch
+#define SWITCH_PIN 8       //encoder button switch
 #define DATA_PIN 22        // rgb led
-#define BATT_SENSE_PIN 26  // (10.41 + 6.55) / 6.55 = 2.589
+#define BATT_SENSE_PIN 26  // voltage divider resistors: (10.41 + 6.55) / 6.55 = 2.589 ratio
 
 Servo brakeServo;               // brakes
 int brakeServoPosition = 1500;  //start middle
 Servo latchServo;               // dual deploy latch
 int latchServoPosition = 2000;  //start open
 
-Encoder myEnc(6, 7);      //rotary encoder
-bool switchClick = 0;     // store encoder switch state
-long oldPosition = -999;  // for encoder
+Encoder myEnc(6, 7);   //rotary encoder
+bool switchClick = 0;  // store encoder switch state
+long oldPosition = -999;             // for encoder
 
 Adafruit_ICM20649 icm;  // accelerometer
 Adafruit_BMP3XX bmp;    // barometric sensor
@@ -50,13 +50,13 @@ TFT_eSPI tft = TFT_eSPI();  // lcd library instance
 #define PIXELPERLINE 24     //line height on lcd for font 4
 
 int FLIGHT_NUM;           // number of flights or boots of the arduino
-#define SERIAL_DEBUG 1    // print serial monitor data  toggle
+#define SERIAL_DEBUG 0    // print serial monitor data  toggle
 #define M2FEET 3.28084    // meter to feet conversion factor
 #define DM2FEET 0.328084  // decimeter to feet conversion factor
 #define FEET2M 0.3048     // foot to meter conversion factor
 #define FEET2DM 3.048     // feet to decimeter conversion factor
 
-float TARGET_ALT_M = 750 * FEET2M;  // trigger height in m
+float TARGET_ALT_M = 200;  // trigger height in m
 
 #define LAUNCH_THRESHOLD_MpS 10.0  // Launch detection threshold in meters/second
 #define SAMPLE_WINDOW 20           // Number of samples to check for rate calculation
@@ -89,7 +89,7 @@ float triggered_alt = 0;  // alt trigger occurred in m
 float current_alt = 0;    // live reading of alt
 float deltaT = 0.1;       // time step, initial set small to avoid divide by zero
 
-#define loopms 15     // how many milliseconds per measurement loop 20ms = 50hz 10ms = 100hZ 1ms5 = 66hz
+#define loopms 20     // how many milliseconds per measurement loop 20ms = 50hz 10ms = 100hZ 15ms = 66hz
 #define serialms 200  // milliseconds per serial print loop
 #define menums 250    // milliseconds permenu loop
 #define lcdms 1000    // milliseconds per lcd re-draw
@@ -100,7 +100,7 @@ unsigned long menuLoop = millis();    // menu update loop
 unsigned long lcdLoop = millis();     // lcd display update loop
 
 unsigned long apogeeTime = millis();  // time when apogee happened
-unsigned long deployTime = 0;         // dual deploy time
+unsigned long deployTime = 0;         // dual deploy time ms
 unsigned long currentTime;
 unsigned long maxInflectTime;  // time max stopped increading
 
@@ -112,7 +112,7 @@ bool maxInflected = false;      // max has stopped increasing
 
 float rate = 0.0;
 
-int deployDelay = 10000;
+int deployDelay = 4900;  //4.9sec
 int menuState = 0;
 int prevMenuState = 0;
 int knobInc = 0;
@@ -196,7 +196,7 @@ void serialLogTransfer() {  // select and send log file out over serial
       }
       const char *name = entry.name();
       int len = strlen(name);
-      // match files ending in "log.txt" (case-sensitive, matches FN#####log.txt)
+      // match files ending in "log.txt" (format: FN#####log.txt)
       if (len >= 7 && strcmp(name + len - 7, "log.txt") == 0) {
         strncpy(fileList[fileCount], name, 19);
         fileList[fileCount][19] = '\0';
@@ -222,7 +222,7 @@ void serialLogTransfer() {  // select and send log file out over serial
     Serial.println("Enter 1-50 to send, R to refresh, X to exit:");
   };
 
-  // --- Send a file ---
+  // Send file
   auto sendFile = [&](int index) {
     char path[22];
     snprintf(path, sizeof(path), "/%s", fileList[index]);
@@ -261,7 +261,7 @@ void serialLogTransfer() {  // select and send log file out over serial
     Serial.println(" bytes sent");
   };
 
-  // --- Main menu loop ---
+  // menu loop
   scanFiles();
   printMenu();
 
@@ -347,8 +347,8 @@ void setup() {
   if (SD.exists("/target.txt")) {
     TARGET_ALT_M = (int)read3File(SD, "/target.txt") * 0.1;  //store in decimeters, use in M
     SD.remove("/target.txt");
-  }                                                 // desired release height in ft in text file
-  sprintf(numString, "%05d", TARGET_ALT_M * 10.0);  //store in Decimeters
+  }                                                        // desired release height in ft in text file
+  sprintf(numString, "%05d", (int)(TARGET_ALT_M * 10.0));  //store in Decimeters
   writeFile(SD, "/target.txt", numString);
   tft.print("target ft:");
   tft.println(TARGET_ALT_M * M2FEET);
@@ -395,8 +395,6 @@ void setup() {
 
   brakeServo.attach(BRAKE_SERVO_PIN, 1000, 2000);
   latchServo.attach(LATCH_SERVO_PIN, 1000, 2000);
-
-  //\\\\\\\\\
 
   if (!icm.begin_I2C()) {
     if (SERIAL_DEBUG) Serial.println("Failed to find ICM20649 chip");
@@ -491,9 +489,11 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
 
   // log data header to card
+
   sprintf(dataString, "FN: %d, GND: %4.2f, Target: %4.2f, HPA: %d, Delay: %d\n", FLIGHT_NUM, gnd_alt * M2FEET, TARGET_ALT_M * M2FEET, HPA, deployDelay);
   appendFile(SD, rocketLog, dataString);  // headers for data file
-  appendFile(SD, rocketLog, "FN, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brake%, launch, apogee, latchsrvo, X, Y, Z(m/s^2), battery(mV)\n");
+                                          //FlightNum, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brakesrvo, latchsrvo, launch, apogee1, apogee2, X, Y, Z(m/s^2), batt(mV)
+  appendFile(SD, rocketLog, "FN, seconds, altitude(ft), rate(m/s), ground level (ft), max(ft), brakesvo, latchsvo, launch, apogee1, apogee2, X, Y, Z(m/s^2), battery(mV)\n");
 }
 
 void loop() {
@@ -519,12 +519,11 @@ void loop() {
     current_alt = bmp.readAltitude(HPA);
     altRA.addValue(current_alt);  // Store actual altitude
 
-    // Calculate  rate of change
-    if (altRA.getCount() >= SAMPLE_WINDOW) {                   // calculate once 20samples stored, should happen within 0.3sec
+    // Calculate rate
+    if (altRA.getCount() >= SAMPLE_WINDOW) {                   // calculate once 20samples stored
       float newest = altRA.getAverageLast(SAMPLE_WINDOW / 2);  // Average of newest half
       float older = altRA.getAverageLast(SAMPLE_WINDOW);       // Average of all SAMPLE_WINDOW readings
-
-      rate = (newest - older) / deltaT;  // height change in m/sec
+      rate = (newest - older) / deltaT;  // rate of change between the averages
     }
 
     // test for flight states:
@@ -623,7 +622,7 @@ void loop() {
       //topline
       tft.print("V");
       tft.print(fwVersionNumber);
-      tft.print(" FN");
+      tft.print("FN");
       tft.print(FLIGHT_NUM);
       tft.print(" ");
       dtostrf((battery.voltage() / 1000.0), 2, 2, battString);
@@ -632,8 +631,9 @@ void loop() {
       tft.setTextColor(TFT_WHITE, TFT_BLACK);
       //Alt
       tft.setCursor(0, 1 * PIXELPERLINE, 4);
-      tft.print("Alt: ");
-      tft.println(dif_alt * M2FEET);
+      tft.print("h: ");
+      tft.print(dif_alt * M2FEET);
+      tft.print(" s");tft.println(round(millis()/1000),0);  // display without decimals
       //Max
       tft.setCursor(0, 2 * PIXELPERLINE, 4);
       tft.print("Max: ");
@@ -644,7 +644,7 @@ void loop() {
       //Target
       tft.setCursor(0, 3 * PIXELPERLINE, 4);
       tft.print("Target: ");
-      tft.println(TARGET_ALT_M);
+      tft.println((int)round(TARGET_ALT_M * M2FEET));
       //HPA
       tft.setCursor(0, 4 * PIXELPERLINE, 4);
       tft.print("HPA: ");
@@ -653,6 +653,13 @@ void loop() {
       tft.setCursor(0, 5 * PIXELPERLINE, 4);
       tft.print("Deploy: ");
       tft.println(deployDelay);
+      //Chute
+      tft.setCursor(0, 6 * PIXELPERLINE, 4);
+      tft.print("LA12: ");
+      tft.print(apogee1_detected);
+      tft.print(apogee2_detected);
+      tft.println(launch_detected);
+
       //BrakeStatus
       tft.setCursor(0, 7 * PIXELPERLINE, 4);
       tft.print("Brakes: ");
@@ -687,7 +694,7 @@ void loop() {
       //Target
       tft.setCursor(0, 3 * PIXELPERLINE, 4);
       tft.print("Target: ");
-      tft.println(TARGET_ALT_M);
+      tft.println((int)round(TARGET_ALT_M * M2FEET));
       //HPA
       tft.setCursor(0, 4 * PIXELPERLINE, 4);
       tft.print("HPA: ");
@@ -839,7 +846,7 @@ void loop() {
         tft.setCursor(0, 3 * PIXELPERLINE, 4);
         tft.print("Target: ");
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
-        tft.println(TARGET_ALT_M);
+        tft.println((int)round(TARGET_ALT_M * M2FEET));
         if (switchClick) menuState = menuState + 5;
         menuState = menuState + 10 * knobInc;
         break;
@@ -847,10 +854,10 @@ void loop() {
         tft.setCursor(0, 3 * PIXELPERLINE, 4);
         tft.print("Target: ");
         tft.setTextColor(TFT_BLACK, TFT_WHITE);  //highlite
-        tft.println((int)TARGET_ALT_M * M2FEET);
+        tft.println((int)round(TARGET_ALT_M * M2FEET));
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
-        TARGET_ALT_M = TARGET_ALT_M + knobInc;
+        TARGET_ALT_M = TARGET_ALT_M + (knobInc * FEET2M);  //increment by foot
         break;
 
       case 120:                                  // HPA
@@ -908,6 +915,7 @@ void loop() {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
         BRAKE_CLOSE = BRAKE_CLOSE + 5 * knobInc;
+        brakeServoPosition = BRAKE_CLOSE;
         break;
 
       case 150:  //brakeMax
@@ -927,6 +935,7 @@ void loop() {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
         BRAKE_OPEN = BRAKE_OPEN + 5 * knobInc;
+        brakeServoPosition = BRAKE_OPEN;
         break;
 
       case 160:  //latchMin
@@ -946,6 +955,7 @@ void loop() {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
         LATCH_OPEN = LATCH_OPEN + 5 * knobInc;
+        latchServoPosition = LATCH_OPEN;
         break;
 
       case 170:  //latchMax
@@ -965,6 +975,7 @@ void loop() {
         tft.setTextColor(TFT_WHITE, TFT_BLACK);  //plain
         if (switchClick) menuState = menuState - 5;
         LATCH_CLOSE = LATCH_CLOSE + 5 * knobInc;
+        latchServoPosition = LATCH_CLOSE;
         break;
 
 
@@ -977,7 +988,7 @@ void loop() {
         if (switchClick) menuState = 0;  //Click to save
         {
           if (SD.exists("/target.txt")) SD.remove("/target.txt");
-          sprintf(numString, "%05d", TARGET_ALT_M);
+          sprintf(numString, "%05d", (int)(TARGET_ALT_M * 10.0));  //store in decimeters
           writeFile(SD, "/target.txt", numString);
 
           if (SD.exists("/latchopen.txt")) SD.remove("/latchopen.txt");
